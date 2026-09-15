@@ -1,39 +1,65 @@
 /* =========================================================
    NOVA — YOUR SECOND MIND
-   app.js — STABLE CONNECTION BUILD
+   FINAL CONNECTION + MEMORY ENGINE
    ========================================================= */
 
 (() => {
   "use strict";
 
-  /* =======================================================
-     CONFIG
-     ======================================================= */
-
   const WORKER_URL =
     "https://nova-ai-brain.aniksar028.workers.dev/api/chat";
 
-  const MEMORY_KEY = "nova_mind";
+  const MIND_KEY = "nova_mind";
   const MESSAGE_KEY = "nova_messages";
   const MODE_KEY = "nova_mode";
-  const PENDING_MEMORY_KEY = "nova_pending_memory";
+  const TASK_KEY = "nova_tasks";
+  const PENDING_KEY = "nova_pending_memory";
 
-  const MAX_MESSAGES = 40;
-  const MAX_HISTORY_TO_AI = 12;
-  const MAX_MEMORIES = 100;
-  const REQUEST_TIMEOUT = 30000;
+  let novaMode =
+    localStorage.getItem(MODE_KEY) || "ASK";
 
+  let messages =
+    JSON.parse(localStorage.getItem(MESSAGE_KEY) || "[]");
 
-  /* =======================================================
-     HELPERS
-     ======================================================= */
+  let mind =
+    JSON.parse(localStorage.getItem(MIND_KEY) || "[]");
 
-  function $(selector) {
-    return document.querySelector(selector);
+  let pendingMemory =
+    JSON.parse(localStorage.getItem(PENDING_KEY) || "null");
+
+  /* =========================================================
+     BASIC HELPERS
+     ========================================================= */
+
+  function saveAll() {
+    localStorage.setItem(MIND_KEY, JSON.stringify(mind));
+    localStorage.setItem(MESSAGE_KEY, JSON.stringify(messages));
+    localStorage.setItem(MODE_KEY, novaMode);
+    localStorage.setItem(PENDING_KEY, JSON.stringify(pendingMemory));
   }
 
-  function escapeHTML(value) {
-    return String(value ?? "")
+  function toast(text) {
+    const el = document.getElementById("toast");
+
+    if (!el) return;
+
+    el.innerText = text;
+    el.classList.add("show");
+
+    clearTimeout(window.__novaToastTimer);
+
+    window.__novaToastTimer = setTimeout(() => {
+      el.classList.remove("show");
+    }, 2200);
+  }
+
+  function status(text) {
+    const el = document.getElementById("status");
+    if (el) el.innerText = text;
+  }
+
+  function escapeHTML(text) {
+    return String(text)
       .replace(/&/g, "&amp;")
       .replace(/</g, "&lt;")
       .replace(/>/g, "&gt;")
@@ -41,286 +67,229 @@
       .replace(/'/g, "&#039;");
   }
 
-  function normalize(value) {
-    return String(value ?? "")
-      .toLowerCase()
-      .replace(/\s+/g, " ")
-      .trim();
-  }
-
-  function nowISO() {
-    return new Date().toISOString();
-  }
-
-
-  /* =======================================================
-     TOAST
-     ======================================================= */
-
-  function showToast(message) {
-    const toast = $("#toast");
-
-    if (!toast) {
-      console.log("NOVA:", message);
-      return;
-    }
-
-    toast.innerText = message;
-    toast.classList.add("show");
-
-    clearTimeout(window.__novaToastTimer);
-
-    window.__novaToastTimer = setTimeout(() => {
-      toast.classList.remove("show");
-    }, 2200);
-  }
-
-  window.showToast = showToast;
-
-
-  /* =======================================================
+  /* =========================================================
      MODE
-     ======================================================= */
+     ========================================================= */
 
-  let currentMode =
-    localStorage.getItem(MODE_KEY) || "ASK";
-
-  function setMode(mode) {
-    mode = String(mode || "ASK").toUpperCase();
-
-    if (!["ASK", "LEARN", "DO"].includes(mode)) {
-      mode = "ASK";
-    }
-
-    currentMode = mode;
-
-    localStorage.setItem(
-      MODE_KEY,
-      currentMode
-    );
+  function novaSetMode(mode) {
+    novaMode = mode;
+    localStorage.setItem(MODE_KEY, mode);
 
     document
       .querySelectorAll(".mode")
-      .forEach(button => {
-        button.classList.remove("active");
-      });
+      .forEach(btn => btn.classList.remove("active"));
 
-    if (
-      currentMode === "ASK" &&
-      $("#askMode")
-    ) {
-      $("#askMode").classList.add("active");
+    if (mode === "ASK") {
+      document.getElementById("askMode")?.classList.add("active");
     }
 
-    if (
-      currentMode === "LEARN" &&
-      $("#learnMode")
-    ) {
-      $("#learnMode").classList.add("active");
+    if (mode === "LEARN") {
+      document.getElementById("learnMode")?.classList.add("active");
     }
 
-    if (
-      currentMode === "DO" &&
-      $("#doMode")
-    ) {
-      $("#doMode").classList.add("active");
+    if (mode === "DO") {
+      document.getElementById("doMode")?.classList.add("active");
     }
 
-    const status = $("#status");
+    status(mode + " mode • NOVA is ready.");
+    toast(mode + " mode selected");
+  }
 
-    if (status) {
-      status.innerText =
-        `${currentMode} mode • NOVA is ready.`;
-    }
+  /* =========================================================
+     TEXTAREA
+     ========================================================= */
 
-    showToast(
-      `${currentMode} mode selected`
+  function novaAutoResize(element) {
+    if (!element) return;
+
+    element.style.height = "auto";
+
+    element.style.height =
+      Math.min(element.scrollHeight, 180) + "px";
+  }
+
+  /* =========================================================
+     MEMORY
+     ========================================================= */
+
+  const sensitivePatterns = [
+    /password/i,
+    /passcode/i,
+    /otp/i,
+    /one time password/i,
+    /verification code/i,
+    /credit card/i,
+    /debit card/i,
+    /cvv/i,
+    /pin number/i,
+    /bank account/i,
+    /nid number/i,
+    /national id/i
+  ];
+
+  function isSensitive(text) {
+    return sensitivePatterns.some(pattern =>
+      pattern.test(text)
     );
   }
 
-  window.setMode = setMode;
-
-
-  /* =======================================================
-     CHAT STORAGE
-     ======================================================= */
-
-  function getMessages() {
-    try {
-      const raw =
-        localStorage.getItem(MESSAGE_KEY);
-
-      if (!raw) return [];
-
-      const parsed = JSON.parse(raw);
-
-      return Array.isArray(parsed)
-        ? parsed
-        : [];
-    } catch (error) {
-      console.warn(
-        "NOVA messages read error:",
-        error
-      );
-
-      return [];
+  function getMemoryContext() {
+    if (!mind.length) {
+      return "No saved memories.";
     }
+
+    return mind
+      .map((item, index) =>
+        `${index + 1}. [${item.category}] ${item.text}`
+      )
+      .join("\n");
   }
 
+  function renderMind() {
+    let panel = document.getElementById("novaMindPanel");
 
-  function saveMessages(messages) {
-    const clean =
-      Array.isArray(messages)
-        ? messages.slice(-MAX_MESSAGES)
-        : [];
+    if (!panel) {
+      panel = document.createElement("section");
+      panel.id = "novaMindPanel";
+      panel.className = "section";
 
-    localStorage.setItem(
-      MESSAGE_KEY,
-      JSON.stringify(clean)
+      const app =
+        document.querySelector(".app");
+
+      if (app) {
+        app.appendChild(panel);
+      }
+    }
+
+    if (!panel) return;
+
+    panel.innerHTML = `
+      <div class="section-title">My Mind</div>
+
+      <div style="
+        background:#111416;
+        border:1px solid rgba(255,255,255,.08);
+        border-radius:18px;
+        padding:16px;
+      ">
+        ${
+          mind.length
+            ? mind.map((item, index) => `
+                <div style="
+                  padding:12px 0;
+                  border-bottom:${
+                    index === mind.length - 1
+                      ? "none"
+                      : "1px solid rgba(255,255,255,.06)"
+                  };
+                ">
+                  <div style="
+                    font-size:10px;
+                    color:#C8FF4A;
+                    letter-spacing:1px;
+                    text-transform:uppercase;
+                    margin-bottom:5px;
+                  ">
+                    ${escapeHTML(item.category)}
+                  </div>
+
+                  <div style="
+                    color:#F3F5F2;
+                    font-size:14px;
+                    line-height:1.5;
+                  ">
+                    ${escapeHTML(item.text)}
+                  </div>
+                </div>
+              `).join("")
+            : `
+              <div style="
+                color:#89918D;
+                font-size:14px;
+                line-height:1.5;
+              ">
+                Nothing saved yet.
+              </div>
+            `
+        }
+      </div>
+    `;
+
+    panel.style.display = "none";
+  }
+
+  function saveMemory(text, category = "other") {
+    text = String(text || "").trim();
+
+    if (!text || isSensitive(text)) {
+      return false;
+    }
+
+    const exists = mind.some(
+      item =>
+        item.text.toLowerCase() === text.toLowerCase()
     );
-  }
 
+    if (exists) return false;
 
-  function addMessage(role, content) {
-    if (
-      content === null ||
-      content === undefined ||
-      String(content).trim() === ""
-    ) {
-      return;
-    }
-
-    const messages =
-      getMessages();
-
-    messages.push({
-      role:
-        role === "assistant"
-          ? "assistant"
-          : "user",
-
-      content:
-        String(content),
-
-      time:
-        nowISO()
+    mind.push({
+      text,
+      category,
+      savedAt: new Date().toISOString()
     });
 
-    saveMessages(messages);
+    saveAll();
+    renderMind();
+
+    return true;
   }
 
+  function forgetMemory(text) {
+    const before = mind.length;
 
-  /* =======================================================
-     MEMORY — READ
-     ======================================================= */
-
-  function getMind() {
-    try {
-      const raw =
-        localStorage.getItem(MEMORY_KEY);
-
-      if (!raw) return [];
-
-      const parsed =
-        JSON.parse(raw);
-
-      return Array.isArray(parsed)
-        ? parsed
-        : [];
-    } catch {
-      return [];
-    }
-  }
-
-
-  /* =======================================================
-     MEMORY — SENSITIVE PROTECTION
-     ======================================================= */
-
-  function isSensitiveMemory(text) {
-    const t =
-      normalize(text);
-
-    const sensitivePatterns = [
-      "password",
-      "passcode",
-      "pin code",
-      "pin:",
-      "api key",
-      "api_key",
-      "secret key",
-      "secret_key",
-      "private key",
-      "private_key",
-      "credit card",
-      "debit card",
-      "cvv",
-      "cvc",
-      "otp",
-      "one time password",
-      "verification code",
-      "bank account",
-      "account number",
-      "routing number",
-      "nid number",
-      "national id",
-      "passport number"
-    ];
-
-    return sensitivePatterns.some(
-      pattern =>
-        t.includes(pattern)
+    mind = mind.filter(
+      item =>
+        !item.text
+          .toLowerCase()
+          .includes(String(text).toLowerCase())
     );
+
+    saveAll();
+    renderMind();
+
+    return mind.length < before;
   }
 
-
-  /* =======================================================
-     MEMORY — CATEGORY
-     ======================================================= */
-
-  function detectCategory(text) {
-    const t =
-      normalize(text);
+  function detectMemoryCategory(text) {
+    const t = text.toLowerCase();
 
     if (
       t.includes("my name") ||
-      t.includes("my birthday") ||
-      t.includes("my dob") ||
-      t.includes("date of birth") ||
-      t.includes("i was born") ||
-      t.includes("my age")
+      t.includes("i am") ||
+      t.includes("i'm")
     ) {
       return "profile";
     }
 
     if (
-      t.includes("my goal") ||
-      t.includes("i want to become") ||
-      t.includes("i want to learn") ||
-      t.includes("i plan to") ||
-      t.includes("my target")
+      t.includes("goal") ||
+      t.includes("want to") ||
+      t.includes("dream")
     ) {
       return "goals";
     }
 
     if (
-      t.includes("i like") ||
-      t.includes("i love") ||
-      t.includes("i prefer") ||
-      t.includes("i don't like") ||
-      t.includes("i dont like") ||
-      t.includes("i hate")
+      t.includes("prefer") ||
+      t.includes("like") ||
+      t.includes("don't like")
     ) {
       return "preferences";
     }
 
     if (
-      t.includes("my routine") ||
-      t.includes("i wake up") ||
-      t.includes("i sleep") ||
-      t.includes("i study") ||
-      t.includes("i work") ||
-      t.includes("my schedule")
+      t.includes("routine") ||
+      t.includes("schedule")
     ) {
       return "routine";
     }
@@ -328,1751 +297,592 @@
     return "other";
   }
 
-
-  /* =======================================================
-     MEMORY — DETECTION
-     ======================================================= */
-
-  function detectMemory(text) {
-    const original =
-      String(text || "").trim();
-
-    if (!original) {
-      return null;
-    }
-
-    if (
-      isSensitiveMemory(original)
-    ) {
-      return null;
-    }
-
-    const t =
-      normalize(original);
-
-    const explicitTriggers = [
-      "remember this",
-      "remember that",
-      "remember my",
-      "remember i ",
-      "remember i'm",
-      "remember im",
-      "save this",
-      "save that",
-      "don't forget",
-      "dont forget",
-      "keep this in mind"
-    ];
+  function checkMemoryRequest(text) {
+    const t = text.toLowerCase();
 
     const explicit =
-      explicitTriggers.some(
-        trigger =>
-          t.includes(trigger)
-      );
+      t.includes("remember this") ||
+      t.includes("remember that") ||
+      t.includes("save this") ||
+      t.includes("save that") ||
+      t.includes("keep this in mind");
 
-    const automaticPatterns = [
-      "my name is",
-      "my birthday is",
-      "my dob is",
-      "my date of birth is",
-      "i was born",
-      "my goal is",
-      "my goal ",
-      "i want to become",
-      "i want to learn",
-      "i plan to",
-      "my target is",
-      "i like",
-      "i love",
-      "i prefer",
-      "i don't like",
-      "i dont like",
-      "my routine",
-      "my schedule",
-      "i study",
-      "i work"
-    ];
-
-    const automatic =
-      automaticPatterns.some(
-        pattern =>
-          t.includes(pattern)
-      );
-
-    if (
-      !explicit &&
-      !automatic
-    ) {
-      return null;
-    }
-
-    let content =
-      original
-        .replace(
-          /^remember this[\s:,.!?-]*/i,
-          ""
-        )
-        .replace(
-          /^remember that[\s:,.!?-]*/i,
-          ""
-        )
-        .replace(
-          /^save this[\s:,.!?-]*/i,
-          ""
-        )
-        .replace(
-          /^save that[\s:,.!?-]*/i,
-          ""
-        )
+    if (explicit) {
+      const cleaned = text
+        .replace(/remember this/gi, "")
+        .replace(/remember that/gi, "")
+        .replace(/save this/gi, "")
+        .replace(/save that/gi, "")
+        .replace(/keep this in mind/gi, "")
         .trim();
 
-    if (!content) {
-      content = original;
+      if (cleaned && !isSensitive(cleaned)) {
+        saveMemory(
+          cleaned,
+          detectMemoryCategory(cleaned)
+        );
+
+        return true;
+      }
     }
 
-    return {
-      content,
-      category:
-        detectCategory(original),
-      explicit,
-      automatic
-    };
+    return false;
   }
 
-
-  /* =======================================================
-     MEMORY — SAVE
-     ======================================================= */
-
-  function saveMind(
-    content,
-    category = "other"
-  ) {
-    const cleanContent =
-      String(content || "").trim();
-
-    if (!cleanContent) {
-      return false;
-    }
+  function checkForgetRequest(text) {
+    const t = text.toLowerCase();
 
     if (
-      isSensitiveMemory(cleanContent)
+      !t.includes("forget") &&
+      !t.includes("remove from memory")
     ) {
       return false;
     }
 
-    let memories =
-      getMind();
+    const cleaned = text
+      .replace(/forget/gi, "")
+      .replace(/remove from memory/gi, "")
+      .trim();
 
-    const normalizedContent =
-      normalize(cleanContent)
-        .replace(/[.,!?]/g, "");
-
-    const duplicate =
-      memories.some(memory => {
-        const existing =
-          normalize(memory.content)
-            .replace(/[.,!?]/g, "");
-
-        return (
-          existing ===
-          normalizedContent
-        );
-      });
-
-    if (duplicate) {
-      return false;
+    if (cleaned) {
+      if (forgetMemory(cleaned)) {
+        toast("Memory removed");
+      } else {
+        toast("I couldn't find that memory");
+      }
+    } else {
+      toast("Tell me what to forget.");
     }
-
-    memories.unshift({
-      id:
-        `${Date.now()}-${Math.random()
-          .toString(36)
-          .slice(2, 8)}`,
-
-      content:
-        cleanContent,
-
-      category,
-
-      time:
-        nowISO()
-    });
-
-    memories =
-      memories.slice(
-        0,
-        MAX_MEMORIES
-      );
-
-    localStorage.setItem(
-      MEMORY_KEY,
-      JSON.stringify(memories)
-    );
 
     return true;
   }
 
+  function detectPossibleMemory(text) {
+    if (!text || isSensitive(text)) return null;
 
-  /* =======================================================
-     MEMORY — DELETE
-     ======================================================= */
+    const t = text.toLowerCase();
 
-  function deleteMind(id) {
-    const memories =
-      getMind();
+    const possible =
+      t.includes("my name is") ||
+      t.includes("i am") ||
+      t.includes("i'm") ||
+      t.includes("i want") ||
+      t.includes("my goal") ||
+      t.includes("i prefer") ||
+      t.includes("i like");
 
-    const updated =
-      memories.filter(
-        memory =>
-          String(memory.id) !==
-          String(id)
-      );
+    if (!possible) return null;
 
-    localStorage.setItem(
-      MEMORY_KEY,
-      JSON.stringify(updated)
+    const alreadySaved = mind.some(
+      item =>
+        item.text.toLowerCase() ===
+        text.toLowerCase()
     );
 
-    renderMind();
-
-    showToast(
-      "Memory deleted."
-    );
-  }
-
-
-  /* =======================================================
-     MEMORY — CLEAR
-     ======================================================= */
-
-  function clearMind() {
-    const confirmed =
-      window.confirm(
-        "Clear all memories from My Mind?"
-      );
-
-    if (!confirmed) {
-      return;
-    }
-
-    localStorage.removeItem(
-      MEMORY_KEY
-    );
-
-    localStorage.removeItem(
-      PENDING_MEMORY_KEY
-    );
-
-    renderMind();
-
-    showToast(
-      "My Mind cleared."
-    );
-  }
-
-
-  /* =======================================================
-     MEMORY — EDIT
-     ======================================================= */
-
-  function editMind(id) {
-    const memories =
-      getMind();
-
-    const memory =
-      memories.find(
-        item =>
-          String(item.id) ===
-          String(id)
-      );
-
-    if (!memory) {
-      return;
-    }
-
-    const updated =
-      window.prompt(
-        "Edit this memory:",
-        memory.content
-      );
-
-    if (updated === null) {
-      return;
-    }
-
-    const clean =
-      updated.trim();
-
-    if (!clean) {
-      return;
-    }
-
-    if (
-      isSensitiveMemory(clean)
-    ) {
-      showToast(
-        "Sensitive information can't be saved."
-      );
-
-      return;
-    }
-
-    memory.content =
-      clean;
-
-    memory.category =
-      detectCategory(clean);
-
-    memory.time =
-      nowISO();
-
-    localStorage.setItem(
-      MEMORY_KEY,
-      JSON.stringify(memories)
-    );
-
-    renderMind();
-
-    showToast(
-      "Memory updated."
-    );
-  }
-
-
-  /* =======================================================
-     PENDING MEMORY
-     ======================================================= */
-
-  function getPendingMemory() {
-    try {
-      const raw =
-        localStorage.getItem(
-          PENDING_MEMORY_KEY
-        );
-
-      if (!raw) {
-        return null;
-      }
-
-      return JSON.parse(raw);
-    } catch {
-      localStorage.removeItem(
-        PENDING_MEMORY_KEY
-      );
-
-      return null;
-    }
-  }
-
-
-  function setPendingMemory(memory) {
-    localStorage.setItem(
-      PENDING_MEMORY_KEY,
-      JSON.stringify(memory)
-    );
-  }
-
-
-  function clearPendingMemory() {
-    localStorage.removeItem(
-      PENDING_MEMORY_KEY
-    );
-  }
-
-
-  /* =======================================================
-     MEMORY CONFIRMATION
-     ======================================================= */
-
-  function handleMemoryConfirmation(text) {
-    const pending =
-      getPendingMemory();
-
-    if (!pending) {
-      return null;
-    }
-
-    const t =
-      normalize(text);
-
-    const yesWords = [
-      "yes",
-      "yes save",
-      "save it",
-      "save this",
-      "remember it",
-      "remember this",
-      "ok",
-      "okay",
-      "sure",
-      "do it",
-      "go ahead",
-      "save"
-    ];
-
-    const noWords = [
-      "no",
-      "nope",
-      "don't save",
-      "dont save",
-      "do not save",
-      "don't remember",
-      "dont remember",
-      "skip",
-      "cancel"
-    ];
-
-    const isYes =
-      yesWords.some(
-        word =>
-          t === word ||
-          t.startsWith(
-            word + " "
-          )
-      );
-
-    const isNo =
-      noWords.some(
-        word =>
-          t === word ||
-          t.startsWith(
-            word + " "
-          )
-      );
-
-    if (isYes) {
-      const saved =
-        saveMind(
-          pending.content,
-          pending.category
-        );
-
-      clearPendingMemory();
-
-      return {
-        type: "saved",
-
-        message:
-          saved
-            ? `Saved to My Mind: "${pending.content}"`
-            : "That memory is already saved."
-      };
-    }
-
-    if (isNo) {
-      clearPendingMemory();
-
-      return {
-        type: "rejected",
-
-        message:
-          "Okay. I won't save it."
-      };
-    }
-
-    return null;
-  }
-
-
-  /* =======================================================
-     SMART MEMORY
-     ======================================================= */
-
-  function handleSmartMemory(text) {
-    const detected =
-      detectMemory(text);
-
-    if (!detected) {
-      return null;
-    }
-
-    if (detected.explicit) {
-      const saved =
-        saveMind(
-          detected.content,
-          detected.category
-        );
-
-      if (saved) {
-        return {
-          type: "saved",
-
-          message:
-            `Got it. I'll remember this: "${detected.content}"`
-        };
-      }
-
-      return null;
-    }
-
-    const pending = {
-      content:
-        detected.content,
-
-      category:
-        detected.category,
-
-      createdAt:
-        Date.now()
-    };
-
-    setPendingMemory(
-      pending
-    );
+    if (alreadySaved) return null;
 
     return {
-      type: "pending",
-
-      message:
-        `I noticed something that may be useful to remember:\n\n"${detected.content}"\n\nShould I save this to My Mind?`
+      text,
+      category: detectMemoryCategory(text)
     };
   }
 
+  /* =========================================================
+     CHAT UI
+     ========================================================= */
 
-  /* =======================================================
-     FORGET
-     ======================================================= */
+  function ensureChatPanel() {
+    let panel =
+      document.getElementById("novaChatPanel");
 
-  function processForgetCommand(text) {
-    const t =
-      normalize(text);
+    if (panel) return panel;
 
-    if (
-      t === "forget everything about me" ||
-      t === "forget everything" ||
-      t === "clear all my memories" ||
-      t === "clear my mind"
-    ) {
-      localStorage.removeItem(
-        MEMORY_KEY
-      );
+    panel = document.createElement("section");
 
-      clearPendingMemory();
+    panel.id = "novaChatPanel";
+    panel.className = "section";
 
-      return {
-        handled: true,
+    panel.innerHTML = `
+      <div class="section-title">Conversation</div>
 
-        message:
-          "Okay. I've cleared the memories stored in this browser."
-      };
-    }
-
-    const prefixes = [
-      "forget my ",
-      "forget "
-    ];
-
-    for (const prefix of prefixes) {
-      if (
-        !t.startsWith(prefix)
-      ) {
-        continue;
-      }
-
-      const target =
-        t.slice(
-          prefix.length
-        ).trim();
-
-      if (!target) {
-        continue;
-      }
-
-      const memories =
-        getMind();
-
-      const before =
-        memories.length;
-
-      const updated =
-        memories.filter(
-          memory =>
-            !normalize(
-              memory.content
-            ).includes(target)
-        );
-
-      localStorage.setItem(
-        MEMORY_KEY,
-        JSON.stringify(updated)
-      );
-
-      if (
-        updated.length < before
-      ) {
-        return {
-          handled: true,
-
-          message:
-            `Okay. I removed the memory related to "${target}".`
-        };
-      }
-
-      return {
-        handled: true,
-
-        message:
-          `I couldn't find a saved memory related to "${target}".`
-      };
-    }
-
-    return null;
-  }
-
-
-  /* =======================================================
-     MEMORY CONTEXT
-     ======================================================= */
-
-  function getMindContext() {
-    const memories =
-      getMind();
-
-    if (!memories.length) {
-      return "No saved memories.";
-    }
-
-    return memories
-      .map(
-        (memory, index) =>
-          `${index + 1}. [${memory.category}] ${memory.content}`
-      )
-      .join("\n");
-  }
-
-
-  /* =======================================================
-     MEMORY UI
-     ======================================================= */
-
-  let memoryFilter = "all";
-
-
-  function formatMemoryDate(time) {
-    if (!time) return "";
-
-    try {
-      return new Date(time)
-        .toLocaleDateString(
-          undefined,
-          {
-            day: "numeric",
-            month: "short",
-            year: "numeric"
-          }
-        );
-    } catch {
-      return "";
-    }
-  }
-
-
-  function setMemoryFilter(filter) {
-    memoryFilter =
-      filter || "all";
-
-    renderMind();
-  }
-
-
-  function renderMind() {
-    let container =
-      $("#novaMind");
-
-    if (!container) {
-      container =
-        document.createElement(
-          "section"
-        );
-
-      container.id =
-        "novaMind";
-
-      container.className =
-        "nova-mind-panel";
-
-      const composer =
-        $(".composer");
-
-      if (composer) {
-        composer.parentNode.insertBefore(
-          container,
-          composer.nextSibling
-        );
-      } else {
-        document.body.appendChild(
-          container
-        );
-      }
-    }
-
-    const memories =
-      getMind();
-
-    container.innerHTML = `
-      <div class="nova-mind-header">
-        <div>
-          <div class="nova-mind-label">
-            MY MIND
-          </div>
-
-          <h2>
-            Your saved memories
-          </h2>
-        </div>
-
-        <button
-          type="button"
-          class="nova-mind-clear"
-          onclick="NOVA.clearMind()"
-        >
-          Clear
-        </button>
-      </div>
-
-      <div class="nova-mind-tools">
-
-        <input
-          id="novaMindSearch"
-          type="search"
-          placeholder="Search your memories..."
-          value="${escapeHTML(
-            $("#novaMindSearch")?.value || ""
-          )}"
-          oninput="NOVA.renderMind()"
-        />
-
-        <div class="nova-memory-filters">
-
-          <button
-            type="button"
-            class="nova-filter ${
-              memoryFilter === "all"
-                ? "active"
-                : ""
-            }"
-            onclick="NOVA.setMemoryFilter('all')"
-          >
-            All
-          </button>
-
-          <button
-            type="button"
-            class="nova-filter ${
-              memoryFilter === "profile"
-                ? "active"
-                : ""
-            }"
-            onclick="NOVA.setMemoryFilter('profile')"
-          >
-            Profile
-          </button>
-
-          <button
-            type="button"
-            class="nova-filter ${
-              memoryFilter === "goals"
-                ? "active"
-                : ""
-            }"
-            onclick="NOVA.setMemoryFilter('goals')"
-          >
-            Goals
-          </button>
-
-          <button
-            type="button"
-            class="nova-filter ${
-              memoryFilter === "preferences"
-                ? "active"
-                : ""
-            }"
-            onclick="NOVA.setMemoryFilter('preferences')"
-          >
-            Preferences
-          </button>
-
-          <button
-            type="button"
-            class="nova-filter ${
-              memoryFilter === "routine"
-                ? "active"
-                : ""
-            }"
-            onclick="NOVA.setMemoryFilter('routine')"
-          >
-            Routine
-          </button>
-
-        </div>
-      </div>
-
-      <div id="novaMemoryList">
-        ${
-          memories.length
-            ? memories
-                .map(
-                  memory => `
-                    <div
-                      class="nova-memory-card"
-                      data-category="${escapeHTML(
-                        memory.category
-                      )}"
-                    >
-
-                      <div class="nova-memory-top">
-
-                        <span class="nova-memory-category">
-                          ${escapeHTML(
-                            memory.category
-                          )}
-                        </span>
-
-                        <span class="nova-memory-time">
-                          ${formatMemoryDate(
-                            memory.time
-                          )}
-                        </span>
-
-                      </div>
-
-                      <div class="nova-memory-content">
-                        ${escapeHTML(
-                          memory.content
-                        )}
-                      </div>
-
-                      <div class="nova-memory-actions">
-
-                        <button
-                          type="button"
-                          onclick="NOVA.editMind('${escapeHTML(
-                            memory.id
-                          )}')"
-                        >
-                          Edit
-                        </button>
-
-                        <button
-                          type="button"
-                          onclick="NOVA.deleteMind('${escapeHTML(
-                            memory.id
-                          )}')"
-                        >
-                          Delete
-                        </button>
-
-                      </div>
-
-                    </div>
-                  `
-                )
-                .join("")
-            : `
-              <div class="nova-empty-mind">
-                <div class="nova-empty-icon">
-                  ◉
-                </div>
-
-                <strong>
-                  Your Mind is empty
-                </strong>
-
-                <span>
-                  Important things you choose to save
-                  will appear here.
-                </span>
-              </div>
-            `
-        }
-      </div>
+      <div id="novaChatMessages" style="
+        display:flex;
+        flex-direction:column;
+        gap:10px;
+      "></div>
     `;
 
-    applyMindFilter();
+    const composer =
+      document.querySelector(".composer");
+
+    if (composer) {
+      composer.after(panel);
+    } else {
+      document.querySelector(".app")?.appendChild(panel);
+    }
+
+    return panel;
   }
-
-
-  function applyMindFilter() {
-    const list =
-      $("#novaMemoryList");
-
-    if (!list) return;
-
-    const search =
-      normalize(
-        $("#novaMindSearch")?.value || ""
-      );
-
-    const cards =
-      list.querySelectorAll(
-        ".nova-memory-card"
-      );
-
-    cards.forEach(card => {
-      const category =
-        card.dataset.category || "";
-
-      const content =
-        normalize(
-          card.innerText
-        );
-
-      const categoryMatch =
-        memoryFilter === "all" ||
-        category === memoryFilter;
-
-      const searchMatch =
-        !search ||
-        content.includes(search);
-
-      card.style.display =
-        categoryMatch &&
-        searchMatch
-          ? ""
-          : "none";
-    });
-  }
-
-
-  /* =======================================================
-     CHAT UI
-     ======================================================= */
-
-  function formatAIText(text) {
-    return escapeHTML(text)
-      .replace(/\n/g, "<br>");
-  }
-
 
   function renderChat() {
-    let container =
-      $("#novaChat");
+    const panel = ensureChatPanel();
 
-    if (!container) {
-      container =
-        document.createElement(
-          "section"
-        );
+    const box =
+      panel.querySelector("#novaChatMessages");
 
-      container.id =
-        "novaChat";
-
-      container.className =
-        "nova-chat-panel";
-
-      const composer =
-        $(".composer");
-
-      if (composer) {
-        composer.parentNode.insertBefore(
-          container,
-          composer
-        );
-      } else {
-        document.body.prepend(
-          container
-        );
-      }
-    }
-
-    const messages =
-      getMessages();
+    if (!box) return;
 
     if (!messages.length) {
-      container.innerHTML = "";
+      box.innerHTML = "";
       return;
     }
 
-    container.innerHTML = `
-      <div class="nova-chat-header">
-        <div>
-          <div class="nova-chat-label">
-            NOVA
+    box.innerHTML = messages
+      .slice(-30)
+      .map(item => `
+        <div style="
+          background:${
+            item.role === "user"
+              ? "rgba(200,255,74,.08)"
+              : "#111416"
+          };
+          border:1px solid rgba(255,255,255,.07);
+          border-radius:16px;
+          padding:13px 15px;
+          color:#F3F5F2;
+          font-size:14px;
+          line-height:1.55;
+        ">
+          <div style="
+            font-size:10px;
+            color:${
+              item.role === "user"
+                ? "#C8FF4A"
+                : "#89918D"
+            };
+            margin-bottom:5px;
+            letter-spacing:1px;
+          ">
+            ${
+              item.role === "user"
+                ? "YOU"
+                : "NOVA"
+            }
           </div>
 
-          <h2>
-            Conversation
-          </h2>
+          ${escapeHTML(item.content)
+            .replace(/\n/g, "<br>")}
         </div>
+      `)
+      .join("");
 
-        <button
-          type="button"
-          onclick="NOVA.clearChat()"
-        >
-          Clear
-        </button>
-      </div>
-
-      <div class="nova-chat-messages">
-        ${messages
-          .map(
-            message => `
-              <div
-                class="nova-message ${
-                  message.role === "assistant"
-                    ? "nova-assistant"
-                    : "nova-user"
-                }"
-              >
-
-                <div class="nova-message-role">
-                  ${
-                    message.role === "assistant"
-                      ? "NOVA"
-                      : "YOU"
-                  }
-                </div>
-
-                <div class="nova-message-content">
-                  ${formatAIText(
-                    message.content
-                  )}
-                </div>
-
-              </div>
-            `
-          )
-          .join("")}
-      </div>
-    `;
-
-    const messagesBox =
-      container.querySelector(
-        ".nova-chat-messages"
-      );
-
-    if (messagesBox) {
-      messagesBox.scrollTop =
-        messagesBox.scrollHeight;
-    }
+    panel.style.display = "block";
   }
 
+  function addMessage(role, content) {
+    messages.push({
+      role,
+      content: String(content),
+      time: Date.now()
+    });
 
-  function clearChat() {
-    const confirmed =
-      window.confirm(
-        "Clear NOVA conversation?"
-      );
+    messages = messages.slice(-40);
 
-    if (!confirmed) {
-      return;
-    }
-
-    localStorage.removeItem(
-      MESSAGE_KEY
+    localStorage.setItem(
+      MESSAGE_KEY,
+      JSON.stringify(messages)
     );
 
     renderChat();
-
-    showToast(
-      "Conversation cleared."
-    );
   }
 
-
-  /* =======================================================
-     AI REQUEST — FIXED
-     ======================================================= */
+  /* =========================================================
+     AI CONNECTION
+     ========================================================= */
 
   async function askAI(message) {
 
-    const allMessages =
-      getMessages();
-
-    /*
-      Don't send an excessive amount
-      of browser history.
-    */
-
-    const history =
-      allMessages
-        .slice(-MAX_HISTORY_TO_AI)
-        .map(item => ({
-          role:
-            item.role === "assistant"
-              ? "assistant"
-              : "user",
-
-          content:
-            String(
-              item.content || ""
-            )
-        }));
-
+    const history = messages
+      .slice(-12)
+      .map(item => ({
+        role:
+          item.role === "assistant"
+            ? "assistant"
+            : "user",
+        content: String(item.content || "")
+      }));
 
     const payload = {
-      message:
-        String(message),
-
-      mode:
-        currentMode,
-
+      message: String(message),
+      mode: novaMode,
       history,
-
-      memory:
-        getMindContext()
+      memory: getMemoryContext()
     };
-
-
-    /*
-      Timeout protection.
-    */
 
     const controller =
       new AbortController();
 
     const timeout =
-      setTimeout(
-        () => controller.abort(),
-        REQUEST_TIMEOUT
-      );
-
+      setTimeout(() => {
+        controller.abort();
+      }, 30000);
 
     try {
 
       /*
         IMPORTANT:
-        text/plain keeps this POST simple and
-        avoids unnecessary CORS preflight.
-        Worker still reads request.json().
+        text/plain avoids browser CORS preflight issues
+        on some static hosting environments.
       */
 
-      const response =
-        await fetch(
-          WORKER_URL,
-          {
-            method: "POST",
+      const response = await fetch(
+        WORKER_URL,
+        {
+          method: "POST",
+          mode: "cors",
 
-            mode: "cors",
+          headers: {
+            "Content-Type":
+              "text/plain;charset=UTF-8",
+            "Accept": "application/json"
+          },
 
-            headers: {
-              "Content-Type":
-                "text/plain;charset=UTF-8",
+          body: JSON.stringify(payload),
 
-              "Accept":
-                "application/json"
-            },
-
-            body:
-              JSON.stringify(payload),
-
-            signal:
-              controller.signal
-          }
-        );
-
-
-      clearTimeout(timeout);
-
-
-      if (!response.ok) {
-        throw new Error(
-          `Worker HTTP ${response.status}`
-        );
-      }
-
-
-      /*
-        Read text first so malformed JSON
-        doesn't produce a confusing error.
-      */
+          signal: controller.signal
+        }
+      );
 
       const raw =
         await response.text();
 
-      if (!raw) {
+      if (!response.ok) {
         throw new Error(
-          "Worker returned an empty response."
+          `HTTP ${response.status}: ${raw}`
         );
       }
-
 
       let data;
 
       try {
-        data =
-          JSON.parse(raw);
+        data = JSON.parse(raw);
       } catch {
-        console.error(
-          "NOVA RAW RESPONSE:",
-          raw
-        );
-
         throw new Error(
           "Worker returned invalid JSON."
         );
       }
 
-
-      if (
-        data &&
-        data.success === false
-      ) {
+      if (data.success === false) {
         throw new Error(
-          data.error ||
-          "NOVA Worker returned an error."
+          data.error || "AI request failed."
         );
       }
-
 
       const answer =
-        data?.answer ??
-        data?.response ??
-        data?.result?.response ??
-        data?.result?.choices?.[0]
-          ?.message?.content ??
-        data?.choices?.[0]
-          ?.message?.content;
+        data.answer ||
+        data.response ||
+        data.result?.response ||
+        data.result?.choices?.[0]?.message?.content ||
+        data.choices?.[0]?.message?.content;
 
-
-      if (
-        answer === undefined ||
-        answer === null ||
-        String(answer).trim() === ""
-      ) {
-        console.error(
-          "NOVA UNKNOWN RESPONSE:",
-          data
-        );
-
+      if (!answer) {
         throw new Error(
-          "NOVA returned an empty answer."
+          "AI returned no answer."
         );
       }
-
 
       return String(answer);
 
-    } catch (error) {
-
+    } finally {
       clearTimeout(timeout);
-
-      console.error(
-        "NOVA API ERROR:",
-        error
-      );
-
-      if (
-        error?.name ===
-        "AbortError"
-      ) {
-        throw new Error(
-          "NOVA request timed out."
-        );
-      }
-
-      throw error;
     }
   }
 
+  /* =========================================================
+     MAIN ASK NOVA
+     ========================================================= */
 
-  /* =======================================================
-     MAIN ASK
-     ======================================================= */
-
-  async function askNova() {
+  async function novaAskNova() {
 
     const input =
-      $("#prompt");
+      document.getElementById("prompt");
 
-    if (!input) {
-      return;
-    }
+    if (!input) return;
 
     const text =
       input.value.trim();
 
     if (!text) {
-      showToast(
-        "Tell NOVA what you need."
-      );
-
+      toast("Tell NOVA what you need.");
       return;
     }
 
+    /* Pending memory confirmation */
 
-    /* -----------------------------------------------
-       MEMORY CONFIRMATION
-       ----------------------------------------------- */
+    if (pendingMemory) {
 
-    const confirmation =
-      handleMemoryConfirmation(
-        text
-      );
+      const lower =
+        text.toLowerCase();
 
-    if (confirmation) {
+      const yes =
+        /^(yes|yeah|yep|sure|ok|okay|save it|remember it|হ্যাঁ|জি|ঠিক আছে|সেভ করো)$/i
+          .test(lower);
 
-      addMessage(
-        "user",
-        text
-      );
+      const no =
+        /^(no|nope|don't|cancel|না|বাদ দাও)$/i
+          .test(lower);
 
-      addMessage(
-        "assistant",
-        confirmation.message
-      );
+      if (yes) {
+
+        saveMemory(
+          pendingMemory.text,
+          pendingMemory.category
+        );
+
+        pendingMemory = null;
+        saveAll();
+
+        input.value = "";
+
+        toast("Saved to My Mind");
+
+        status("Memory saved.");
+        renderMind();
+
+        return;
+      }
+
+      if (no) {
+
+        pendingMemory = null;
+        saveAll();
+
+        input.value = "";
+
+        toast("Okay, I won't save it.");
+
+        status("Memory not saved.");
+
+        return;
+      }
+
+      pendingMemory = null;
+      saveAll();
+    }
+
+    /* Explicit forget */
+
+    if (checkForgetRequest(text)) {
+      input.value = "";
+      novaAutoResize(input);
+      return;
+    }
+
+    /* Explicit save */
+
+    if (checkMemoryRequest(text)) {
+
+      addMessage("user", text);
 
       input.value = "";
+      novaAutoResize(input);
 
-      autoResize(input);
-
-      renderChat();
-      renderMind();
-
-      showToast(
-        confirmation.type === "saved"
-          ? "Memory saved."
-          : "Memory not saved."
-      );
+      status("Saved to My Mind.");
+      toast("Memory saved");
 
       return;
     }
 
+    /* Possible automatic memory */
 
-    /* -----------------------------------------------
-       FORGET
-       ----------------------------------------------- */
+    const possibleMemory =
+      detectPossibleMemory(text);
 
-    const forget =
-      processForgetCommand(
-        text
-      );
+    if (possibleMemory) {
 
-    if (forget?.handled) {
+      pendingMemory = possibleMemory;
 
-      addMessage(
-        "user",
-        text
-      );
+      saveAll();
 
-      addMessage(
-        "assistant",
-        forget.message
-      );
+      addMessage("user", text);
 
       input.value = "";
+      novaAutoResize(input);
 
-      autoResize(input);
-
-      renderChat();
-      renderMind();
-
-      return;
-    }
-
-
-    /* -----------------------------------------------
-       SMART MEMORY
-       ----------------------------------------------- */
-
-    const smartMemory =
-      handleSmartMemory(
-        text
+      status(
+        "Should I remember this?"
       );
 
-
-    /*
-      Explicit memory:
-      save and continue naturally.
-    */
-
-    if (
-      smartMemory?.type === "saved"
-    ) {
-
-      addMessage(
-        "user",
-        text
-      );
-
-      addMessage(
-        "assistant",
-        smartMemory.message
-      );
-
-      input.value = "";
-
-      autoResize(input);
-
-      renderChat();
-      renderMind();
-
-      showToast(
-        "Memory saved."
+      toast(
+        "Reply YES to save or NO to skip"
       );
 
       return;
     }
 
+    /* Normal AI request */
 
-    /*
-      Automatic memory:
-      ask before saving.
-    */
-
-    if (
-      smartMemory?.type === "pending"
-    ) {
-
-      addMessage(
-        "user",
-        text
-      );
-
-      addMessage(
-        "assistant",
-        smartMemory.message
-      );
-
-      input.value = "";
-
-      autoResize(input);
-
-      renderChat();
-      renderMind();
-
-      showToast(
-        "Memory confirmation needed."
-      );
-
-      return;
-    }
-
-
-    /* -----------------------------------------------
-       NORMAL AI REQUEST
-       ----------------------------------------------- */
-
-    addMessage(
-      "user",
-      text
-    );
+    addMessage("user", text);
 
     input.value = "";
+    novaAutoResize(input);
 
-    autoResize(input);
-
-    renderChat();
-
-
-    const status =
-      $("#status");
-
-    if (status) {
-      status.innerText =
-        "NOVA is thinking...";
-    }
-
-    showToast(
-      "NOVA is thinking..."
-    );
-
+    status("NOVA is thinking...");
+    toast("Thinking...");
 
     try {
 
       const answer =
         await askAI(text);
 
-
       addMessage(
         "assistant",
         answer
       );
 
-      renderChat();
-      renderMind();
-
-
-      if (status) {
-        status.innerText =
-          `${currentMode} mode • NOVA is ready.`;
-      }
+      status(
+        novaMode +
+        " mode • NOVA is ready."
+      );
 
     } catch (error) {
 
       console.error(
-        "NOVA ERROR:",
+        "NOVA CONNECTION ERROR:",
         error
       );
 
+      status(
+        "NOVA could not connect."
+      );
+
+      toast(
+        "NOVA could not connect"
+      );
 
       /*
-        Keep technical detail in console,
-        clean message in UI.
+        Keep the actual error available
+        for debugging without changing UI.
       */
 
-      let errorMessage =
-        "I couldn't connect to my AI brain right now. Please try again.";
-
-
-      if (
-        error?.message?.includes(
-          "timed out"
-        )
-      ) {
-        errorMessage =
-          "NOVA took too long to respond. Please try again.";
-      }
-
-
-      addMessage(
-        "assistant",
-        errorMessage
-      );
-
-      renderChat();
-
-
-      if (status) {
-        status.innerText =
-          "Connection problem. Try again.";
-      }
-
-      showToast(
-        "NOVA connection problem."
-      );
+      window.NOVA_LAST_ERROR =
+        error?.message || String(error);
     }
   }
 
-  window.askNova =
-    askNova;
-
-
-  /* =======================================================
-     QUICK ACTION
-     ======================================================= */
-
-  function quickAction(text) {
-
-    const input =
-      $("#prompt");
-
-    if (!input) return;
-
-    input.value =
-      String(text || "");
-
-    input.focus();
-
-    autoResize(input);
-
-    showToast(
-      "Ready to send"
-    );
-  }
-
-  window.quickAction =
-    quickAction;
-
-
-  /* =======================================================
+  /* =========================================================
      VOICE
-     ======================================================= */
+     ========================================================= */
 
-  function startVoice() {
+  function novaStartVoice() {
 
     const SpeechRecognition =
       window.SpeechRecognition ||
       window.webkitSpeechRecognition;
 
     if (!SpeechRecognition) {
-      showToast(
+      toast(
         "Voice input isn't supported here."
       );
-
       return;
     }
 
     const recognition =
       new SpeechRecognition();
 
-    recognition.lang =
-      "bn-BD";
+    recognition.lang = "bn-BD";
+    recognition.interimResults = false;
+    recognition.continuous = false;
 
-    recognition.interimResults =
-      false;
-
-    recognition.continuous =
-      false;
-
-
-    const status =
-      $("#status");
-
-    if (status) {
-      status.innerText =
-        "NOVA is listening...";
-    }
-
-    showToast(
-      "NOVA is listening..."
-    );
-
+    status("NOVA is listening...");
 
     recognition.onresult =
       function(event) {
 
         const text =
-          event.results?.[0]?.[0]
-            ?.transcript || "";
+          event.results?.[0]?.[0]?.transcript || "";
 
         const input =
-          $("#prompt");
+          document.getElementById("prompt");
 
         if (!input) return;
 
-        input.value =
-          text;
+        input.value = text;
 
-        autoResize(input);
+        novaAutoResize(input);
 
-        if (status) {
-          status.innerText =
-            "Got it. Press Ask NOVA.";
-        }
-
-        showToast(
-          "Voice captured."
+        status(
+          "Got it. Press Ask NOVA."
         );
       };
-
 
     recognition.onerror =
       function() {
-
-        if (status) {
-          status.innerText =
-            "Voice input stopped.";
-        }
-
-        showToast(
-          "Voice input stopped."
-        );
+        toast("Voice input stopped.");
+        status("NOVA is ready.");
       };
-
-
-    recognition.onend =
-      function() {
-
-        if (
-          status &&
-          status.innerText ===
-            "NOVA is listening..."
-        ) {
-          status.innerText =
-            `${currentMode} mode • NOVA is ready.`;
-        }
-      };
-
 
     try {
       recognition.start();
     } catch (error) {
-      console.warn(
-        "Voice start error:",
-        error
-      );
+      console.error(error);
     }
   }
 
-  window.startVoice =
-    startVoice;
+  /* =========================================================
+     QUICK ACTION
+     ========================================================= */
 
+  function novaQuickAction(text) {
 
-  /* =======================================================
-     TEXTAREA
-     ======================================================= */
+    const input =
+      document.getElementById("prompt");
 
-  function autoResize(element) {
+    if (!input) return;
 
-    if (!element) return;
+    input.value = text;
 
-    element.style.height =
-      "auto";
+    input.focus();
 
-    element.style.height =
-      Math.min(
-        element.scrollHeight,
-        180
-      ) + "px";
+    novaAutoResize(input);
+
+    toast("Ready to send");
   }
 
-  window.autoResize =
-    autoResize;
+  /* =========================================================
+     TASKS
+     ========================================================= */
 
-
-  /* =======================================================
-     ENTER TO SEND
-     ======================================================= */
-
-  document.addEventListener(
-    "keydown",
-    event => {
-
-      const target =
-        event.target;
-
-      if (
-        target &&
-        target.id === "prompt" &&
-        event.key === "Enter" &&
-        !event.shiftKey
-      ) {
-
-        event.preventDefault();
-
-        askNova();
-      }
-    }
-  );
-
-
-  /* =======================================================
-     TASK SYSTEM
-     ======================================================= */
-
-  function saveTasks() {
+  function novaSaveTasks() {
 
     const tasks = {};
 
-    [
-      "task1",
-      "task2",
-      "task3"
-    ].forEach(id => {
+    ["task1", "task2", "task3"]
+      .forEach(id => {
 
-      const task =
-        document.getElementById(id);
+        const task =
+          document.getElementById(id);
 
-      if (task) {
-        tasks[id] =
-          task.classList.contains(
-            "done"
-          );
-      }
-    });
+        if (task) {
+          tasks[id] =
+            task.classList.contains("done");
+        }
+      });
 
     localStorage.setItem(
-      "nova_tasks",
+      TASK_KEY,
       JSON.stringify(tasks)
     );
   }
 
-  window.saveTasks =
-    saveTasks;
+  function novaLoadTasks() {
 
+    const saved =
+      localStorage.getItem(TASK_KEY);
 
-  function loadTasks() {
+    if (!saved) return;
 
     try {
-
-      const saved =
-        localStorage.getItem(
-          "nova_tasks"
-        );
-
-      if (!saved) return;
 
       const tasks =
         JSON.parse(saved);
@@ -2080,171 +890,208 @@
       Object.keys(tasks)
         .forEach(id => {
 
-          const task =
-            document.getElementById(
-              id
-            );
+          const el =
+            document.getElementById(id);
 
           if (
-            task &&
+            el &&
             tasks[id]
           ) {
-            task.classList.add(
-              "done"
-            );
+            el.classList.add("done");
           }
         });
 
-    } catch {
-      console.warn(
-        "Could not load tasks."
-      );
+    } catch (error) {
+      console.error(error);
     }
   }
 
-
-  function toggleTask(id) {
+  function novaToggleTask(id) {
 
     const task =
-      document.getElementById(
-        id
-      );
+      document.getElementById(id);
 
     if (!task) return;
 
-    task.classList.toggle(
-      "done"
-    );
+    task.classList.toggle("done");
 
-    saveTasks();
+    novaSaveTasks();
 
-    showToast(
-      task.classList.contains("done")
-        ? "Nice. Task completed."
-        : "Task reopened."
-    );
+    if (task.classList.contains("done")) {
+      toast("Nice. Task completed.");
+    } else {
+      toast("Task reopened.");
+    }
   }
 
-  window.toggleTask =
-    toggleTask;
+  /* =========================================================
+     NAV
+     ========================================================= */
 
-
-  /* =======================================================
-     NAVIGATION
-     ======================================================= */
-
-  function navClick(name) {
+  function novaNavClick(name) {
 
     if (name === "Mind") {
 
-      const mind =
-        $("#novaMind");
+      const panel =
+        document.getElementById(
+          "novaMindPanel"
+        );
 
-      if (mind) {
+      if (panel) {
 
-        mind.scrollIntoView({
+        panel.style.display =
+          panel.style.display === "none"
+            ? "block"
+            : "none";
+
+        panel.scrollIntoView({
           behavior: "smooth",
           block: "start"
         });
-
-        return;
       }
-    }
-
-
-    if (name === "Home") {
-
-      window.scrollTo({
-        top: 0,
-        behavior: "smooth"
-      });
 
       return;
     }
 
-
-    showToast(
-      `${name} will open here.`
+    toast(
+      name + " will open here."
     );
   }
 
-  window.navClick =
-    navClick;
+  /* =========================================================
+     KEYBOARD
+     ========================================================= */
 
+  function keyboardHandler(event) {
 
-  /* =======================================================
-     GLOBAL NOVA
-     ======================================================= */
+    if (
+      event.key === "Enter" &&
+      !event.shiftKey
+    ) {
 
-  window.NOVA = {
+      const target =
+        event.target;
 
-    getMind,
+      if (
+        target &&
+        target.id === "prompt"
+      ) {
 
-    saveMind,
+        event.preventDefault();
 
-    deleteMind,
+        novaAskNova();
+      }
+    }
+  }
 
-    editMind,
+  /* =========================================================
+     IMPORTANT:
+     INLINE FUNCTIONS IN index.html CAN OVERRIDE app.js.
+     
+     So after the page finishes loading,
+     we deliberately expose the FINAL versions.
+     ========================================================= */
 
-    clearMind,
+  function exposeNOVA() {
 
-    renderMind,
+    window.askNova =
+      novaAskNova;
 
-    renderChat,
+    window.setMode =
+      novaSetMode;
 
-    clearChat,
+    window.startVoice =
+      novaStartVoice;
 
-    getMindContext,
+    window.quickAction =
+      novaQuickAction;
 
-    detectMemory,
+    window.toggleTask =
+      novaToggleTask;
 
-    detectCategory,
+    window.saveTasks =
+      novaSaveTasks;
 
-    isSensitiveMemory,
+    window.loadTasks =
+      novaLoadTasks;
 
-    handleSmartMemory,
+    window.autoResize =
+      novaAutoResize;
 
-    handleMemoryConfirmation,
+    window.navClick =
+      novaNavClick;
 
-    processForgetCommand,
+    window.showToast =
+      toast;
 
-    setMemoryFilter,
+    window.NOVA = {
 
-    askAI
-  };
+      ask: novaAskNova,
 
+      askAI,
 
-  /* =======================================================
-     STARTUP
-     ======================================================= */
+      setMode: novaSetMode,
+
+      saveMemory,
+
+      forgetMemory,
+
+      getMemoryContext,
+
+      getMind: () =>
+        JSON.parse(
+          JSON.stringify(mind)
+        ),
+
+      getMessages: () =>
+        JSON.parse(
+          JSON.stringify(messages)
+        )
+    };
+  }
+
+  /* =========================================================
+     BOOT
+     ========================================================= */
 
   function bootNOVA() {
 
-    setMode(
-      currentMode
-    );
+    /*
+      Wait until inline <script> in index.html
+      has finished executing.
+    */
 
-    loadTasks();
+    exposeNOVA();
 
-    renderChat();
+    novaLoadTasks();
 
     renderMind();
 
+    renderChat();
 
-    const status =
-      $("#status");
+    novaSetMode(novaMode);
 
-    if (status) {
-      status.innerText =
-        `${currentMode} mode • NOVA is ready.`;
+    const input =
+      document.getElementById("prompt");
+
+    if (input) {
+      novaAutoResize(input);
     }
 
+    document.addEventListener(
+      "keydown",
+      keyboardHandler
+    );
+
+    status(
+      novaMode +
+      " mode • NOVA is ready."
+    );
 
     console.log(
-      "NOVA — Your Second Mind: ONLINE"
+      "NOVA FINAL ENGINE READY"
     );
   }
-
 
   if (
     document.readyState ===
@@ -2253,7 +1100,8 @@
 
     document.addEventListener(
       "DOMContentLoaded",
-      bootNOVA
+      bootNOVA,
+      { once: true }
     );
 
   } else {
