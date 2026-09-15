@@ -1,5 +1,5 @@
 const NOVA = {
-  mode: "ASK",
+  mode: localStorage.getItem("nova_mode") || "ASK",
 
   setMode(mode) {
     this.mode = mode;
@@ -7,12 +7,13 @@ const NOVA = {
   },
 
   getMode() {
-    return localStorage.getItem("nova_mode") || "ASK";
+    return this.mode;
   },
 
   saveMessage(role, content) {
-    const messages =
-      JSON.parse(localStorage.getItem("nova_messages") || "[]");
+    const messages = JSON.parse(
+      localStorage.getItem("nova_messages") || "[]"
+    );
 
     messages.push({
       role,
@@ -22,7 +23,7 @@ const NOVA = {
 
     localStorage.setItem(
       "nova_messages",
-      JSON.stringify(messages)
+      JSON.stringify(messages.slice(-30))
     );
   },
 
@@ -37,7 +38,6 @@ const NOVA = {
   },
 
   async ask(message) {
-
     if (!message || !message.trim()) {
       return {
         success: false,
@@ -45,24 +45,55 @@ const NOVA = {
       };
     }
 
+    const history = this.getMessages()
+      .slice(-10)
+      .map(item => ({
+        role: item.role,
+        content: item.content
+      }));
+
     this.saveMessage("user", message);
 
-    /*
-      AI BACKEND CONNECTION WILL GO HERE.
+    try {
+      const response = await fetch(
+        "https://nova-ai-brain.aniksar028.workers.dev/api/chat",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            message: message,
+            mode: this.getMode(),
+            history: history
+          })
+        }
+      );
 
-      IMPORTANT:
-      Never put a private AI API key directly
-      inside this public JavaScript file.
-    */
+      const data = await response.json();
 
-    return {
-      success: true,
-      mode: this.getMode(),
-      message: "NOVA is ready for its AI connection."
-    };
+      if (!response.ok || !data.success) {
+        return {
+          success: false,
+          message: data.error || "NOVA AI request failed."
+        };
+      }
+
+      this.saveMessage("assistant", data.answer);
+
+      return {
+        success: true,
+        mode: this.getMode(),
+        message: data.answer
+      };
+
+    } catch (error) {
+      return {
+        success: false,
+        message: "NOVA could not connect to its AI brain."
+      };
+    }
   }
 };
-
-NOVA.mode = NOVA.getMode();
 
 window.NOVA = NOVA;
