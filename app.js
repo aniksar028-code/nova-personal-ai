@@ -1670,3 +1670,342 @@ window.addEventListener(
 
   }
 );
+/* =========================================================
+   NOVA — SMART MEMORY INTELLIGENCE + CONNECTION STABILITY
+   UI/UX SAFE PATCH
+   ========================================================= */
+
+(function () {
+  "use strict";
+
+  const WORKER_URL =
+    "https://nova-ai-brain.aniksar028.workers.dev/api/chat";
+
+  const MEMORY_KEY = "nova_mind";
+
+  /* ---------- MEMORY HELPERS ---------- */
+
+  function novaGetMemories() {
+    try {
+      const data = JSON.parse(localStorage.getItem(MEMORY_KEY) || "[]");
+      return Array.isArray(data) ? data : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function novaSaveMemories(data) {
+    try {
+      localStorage.setItem(
+        MEMORY_KEY,
+        JSON.stringify(data.slice(-100))
+      );
+    } catch {}
+  }
+
+  function novaCategory(text) {
+    const t = text.toLowerCase();
+
+    if (
+      /name|birthday|dob|date of birth|born|age|study|college|school|location/.test(t)
+    ) return "profile";
+
+    if (
+      /goal|dream|target|want to become|future|career|learn/.test(t)
+    ) return "goals";
+
+    if (
+      /like|love|prefer|favorite|hate|don't like|dont like/.test(t)
+    ) return "preferences";
+
+    if (
+      /routine|wake|sleep|exercise|workout|study time|daily/.test(t)
+    ) return "routine";
+
+    return "other";
+  }
+
+  /* Sensitive information should NEVER be auto-saved */
+  function novaIsSensitive(text) {
+    return /password|passcode|otp|one[- ]time password|api key|secret key|token|cvv|pin|credit card|debit card|bank account|bkash pin|nagad pin/i.test(
+      text
+    );
+  }
+
+  function novaExtractMemory(text) {
+    if (!text || novaIsSensitive(text)) return null;
+
+    const patterns = [
+      /my name is (.+)/i,
+      /my birthday is (.+)/i,
+      /my dob is (.+)/i,
+      /my date of birth is (.+)/i,
+      /i was born (.+)/i,
+      /my goal is (.+)/i,
+      /my goal (?:is|:)?\s*(.+)/i,
+      /i want to (.+)/i,
+      /i like (.+)/i,
+      /i love (.+)/i,
+      /i prefer (.+)/i,
+      /i don't like (.+)/i,
+      /i dont like (.+)/i,
+      /my routine is (.+)/i,
+      /i study (.+)/i,
+      /i work (.+)/i
+    ];
+
+    for (const pattern of patterns) {
+      const match = text.match(pattern);
+      if (match && match[1]) {
+        return match[0].trim();
+      }
+    }
+
+    return null;
+  }
+
+  function novaSmartRemember(text, explicit = false) {
+    if (!text || novaIsSensitive(text)) return false;
+
+    const memory = novaExtractMemory(text);
+
+    /* Explicit "remember/save this" */
+    if (
+      /remember this|remember that|remember my|remember i|remember i'm|save this|save that|don't forget|dont forget|keep this in mind/i.test(
+        text
+      )
+    ) {
+      const clean = text
+        .replace(
+          /remember this|remember that|remember my|remember i|remember i'm|save this|save that|don't forget|dont forget|keep this in mind/gi,
+          ""
+        )
+        .replace(/[.:,-]\s*$/, "")
+        .trim();
+
+      if (clean) {
+        return novaStoreMemory(clean);
+      }
+    }
+
+    /* Automatic memory — only useful, non-sensitive facts */
+    if (memory) {
+      return novaStoreMemory(memory);
+    }
+
+    return false;
+  }
+
+  function novaStoreMemory(content) {
+    if (!content || novaIsSensitive(content)) return false;
+
+    const memories = novaGetMemories();
+
+    const normalized = content
+      .toLowerCase()
+      .replace(/\s+/g, " ")
+      .trim();
+
+    /* Duplicate protection */
+    const duplicate = memories.some(
+      m =>
+        String(m.content || "")
+          .toLowerCase()
+          .replace(/\s+/g, " ")
+          .trim() === normalized
+    );
+
+    if (duplicate) return false;
+
+    const item = {
+      id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
+      content,
+      category: novaCategory(content),
+      time: new Date().toISOString()
+    };
+
+    memories.push(item);
+    novaSaveMemories(memories);
+
+    return true;
+  }
+
+  /* ---------- SMART SUMMARY ---------- */
+
+  window.NOVA_SMART_MEMORY = {
+    getAll() {
+      return novaGetMemories();
+    },
+
+    getContext() {
+      const memories = novaGetMemories();
+
+      if (!memories.length) {
+        return "No saved memories.";
+      }
+
+      return memories
+        .map((m, i) => {
+          return `${i + 1}. [${m.category}] ${m.content}`;
+        })
+        .join("\n");
+    },
+
+    remember(text) {
+      return novaSmartRemember(text, true);
+    },
+
+    clear() {
+      localStorage.removeItem(MEMORY_KEY);
+    }
+  };
+
+  /* ---------- CONNECTION STABILITY ---------- */
+
+  async function novaStableRequest(payload, retries = 2) {
+    let lastError;
+
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      try {
+        const controller = new AbortController();
+
+        const timeout = setTimeout(() => {
+          controller.abort();
+        }, 30000);
+
+        const response = await fetch(WORKER_URL, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify(payload),
+          signal: controller.signal,
+          cache: "no-store"
+        });
+
+        clearTimeout(timeout);
+
+        if (!response.ok) {
+          throw new Error(`Worker HTTP ${response.status}`);
+        }
+
+        const data = await response.json();
+
+        if (!data) {
+          throw new Error("Empty Worker response");
+        }
+
+        if (data.success === false) {
+          throw new Error(data.error || "Worker returned an error");
+        }
+
+        return data;
+      } catch (error) {
+        lastError = error;
+
+        if (attempt < retries) {
+          await new Promise(resolve =>
+            setTimeout(resolve, 800 * (attempt + 1))
+          );
+        }
+      }
+    }
+
+    throw lastError || new Error("Connection failed");
+  }
+
+  window.NOVA_STABLE_REQUEST = novaStableRequest;
+
+  /* ---------- PATCH EXISTING NOVA ASK ---------- */
+
+  if (window.NOVA && typeof window.NOVA.ask === "function") {
+    const originalAsk = window.NOVA.ask;
+
+    window.NOVA.ask = async function (message, options = {}) {
+      try {
+        /*
+         * Save useful memory before sending the message.
+         * Sensitive data is automatically blocked.
+         */
+        novaSmartRemember(message);
+
+        const memories = novaGetMemories();
+
+        const payload = {
+          message: String(message || ""),
+          mode:
+            options.mode ||
+            localStorage.getItem("nova_mode") ||
+            "ASK",
+
+          history: Array.isArray(options.history)
+            ? options.history.slice(-12)
+            : [],
+
+          memory: memories.length
+            ? memories
+                .map(
+                  (m, i) =>
+                    `${i + 1}. [${m.category}] ${m.content}`
+                )
+                .join("\n")
+            : "No saved memories."
+        };
+
+        /*
+         * Use stable connection first.
+         */
+        const result = await novaStableRequest(payload, 2);
+
+        return result;
+      } catch (error) {
+        console.error("NOVA connection error:", error);
+
+        /*
+         * IMPORTANT:
+         * Do not change UI/UX here.
+         * Return a predictable result to the existing UI.
+         */
+        return {
+          success: false,
+          answer:
+            "I'm having a temporary connection problem. Please try again.",
+          error: error.message || "Connection failed"
+        };
+      }
+    };
+  }
+
+  /* ---------- MEMORY COMMANDS ---------- */
+
+  window.NOVA_PROCESS_MEMORY = function (message) {
+    if (!message) return false;
+
+    const lower = message.toLowerCase().trim();
+
+    /* Clear all */
+    if (
+      lower === "forget everything" ||
+      lower === "forget everything about me" ||
+      lower === "clear all my memories"
+    ) {
+      localStorage.removeItem(MEMORY_KEY);
+      return "ALL_CLEARED";
+    }
+
+    /* Explicit save */
+    if (
+      /remember this|remember that|remember my|save this|save that|don't forget|dont forget/i.test(
+        message
+      )
+    ) {
+      return novaSmartRemember(message, true);
+    }
+
+    return false;
+  };
+
+  console.log(
+    "NOVA Smart Memory + Connection Stability loaded."
+  );
+})();
